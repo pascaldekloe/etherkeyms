@@ -4,8 +4,8 @@ package google
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
 
@@ -22,51 +22,54 @@ import (
 
 // ManagedKey uses the Key Management Service (KMS) for blockchain operation.
 type ManagedKey struct {
-	// E.g., "projects/my-project/locations/us-east1/keyRings/my-key-ring/cryptoKeys/my-key/cryptoKeyVersions/123"
-	KeyName string
-
-	ecdsa.PublicKey
+	KeyName string         // identifier within cloud project
+	Addr    common.Address // public key identifier on the blockchain
 
 	// AsymmetricSign method from a Google kms.KeyManagementClient.
 	asymmetricSignFunc func(context.Context, *kmspb.AsymmetricSignRequest, ...gax.CallOption) (*kmspb.AsymmetricSignResponse, error)
 }
 
 // NewManagedKey executes a fail-fast initialization.
+// Key names from the Google cloud are slash-separated paths.
 func NewManagedKey(ctx context.Context, client *kms.KeyManagementClient, keyName string) (*ManagedKey, error) {
-	key, err := publicKeyLookup(ctx, client, keyName)
+	addr, err := resolveAddr(ctx, client, keyName)
 	if err != nil {
 		return nil, err
 	}
 
 	return &ManagedKey{
 		KeyName:            keyName,
-		PublicKey:          key,
+		Addr:               addr,
 		asymmetricSignFunc: client.AsymmetricSign,
 	}, nil
 }
 
-func publicKeyLookup(ctx context.Context, client *kms.KeyManagementClient, keyName string) (ecdsa.PublicKey, error) {
+func resolveAddr(ctx context.Context, client *kms.KeyManagementClient, keyName string) (common.Address, error) {
 	resp, err := client.GetPublicKey(ctx, &kmspb.GetPublicKeyRequest{Name: keyName})
 	if err != nil {
-		return ecdsa.PublicKey{}, fmt.Errorf("Google KMS public key %q lookup: %w", keyName, err)
+		return common.Address{}, fmt.Errorf("Google KMS public key %q lookup: %w", keyName, err)
 	}
 
 	block, _ := pem.Decode([]byte(resp.Pem))
 	if block == nil {
-		return ecdsa.PublicKey{}, fmt.Errorf("Google KMS public key %q PEM empty: %.130q", keyName, resp.Pem)
+		return common.Address{}, fmt.Errorf("Google KMS public key %q PEM empty: %.130q", keyName, resp.Pem)
 	}
 
-	key, err := x509.ParsePKIXPublicKey(block.Bytes)
+	var info struct {
+		AlgID pkix.AlgorithmIdentifier
+		Key   asn1.BitString
+	}
+	_, err = asn1.Unmarshal(block.Bytes, &info)
 	if err != nil {
-		return ecdsa.PublicKey{}, fmt.Errorf("Google KMS public key %q PEM block %q malformed: %w", keyName, block.Type, err)
+		return common.Address{}, fmt.Errorf("Google KMS public key %q PEM block %q: %v", keyName, block.Type, err)
 	}
 
-	ecKey, ok := key.(ecdsa.PublicKey)
-	if !ok {
-		return ecdsa.PublicKey{}, fmt.Errorf("Google KMS public key %q type %T is not an ecdsa.PublicKey", keyName, key)
+	wantAlg := asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 0}
+	if gotAlg := info.AlgID.Algorithm; !gotAlg.Equal(wantAlg) {
+		return common.Address{}, fmt.Errorf("Google KMS public key %q ASN.1 algorithm %s intead of %s", keyName, gotAlg, wantAlg)
 	}
 
-	return ecKey, nil
+	return common.BytesToAddress(crypto.Keccak256(info.Key.Bytes[1:])[12:]), nil
 }
 
 // NewEthereumTransactor retuns a KMS-backed instance. Ctx applies to the entire
@@ -74,7 +77,7 @@ func publicKeyLookup(ctx context.Context, client *kms.KeyManagementClient, keyNa
 func (mk *ManagedKey) NewEthereumTransactor(ctx context.Context, txIdentification types.Signer) *bind.TransactOpts {
 	return &bind.TransactOpts{
 		Context: ctx,
-		From:    crypto.PubkeyToAddress(mk.PublicKey),
+		From:    mk.Addr,
 		Signer:  mk.NewEthereumSigner(ctx, txIdentification),
 	}
 }
@@ -82,10 +85,8 @@ func (mk *ManagedKey) NewEthereumTransactor(ctx context.Context, txIdentificatio
 // NewEthereumSigner retuns a KMS-backed instance. Ctx applies to the entire
 // lifespan of the signer.
 func (mk *ManagedKey) NewEthereumSigner(ctx context.Context, txIdentification types.Signer) bind.SignerFn {
-	keyAddr := crypto.PubkeyToAddress(mk.PublicKey)
-
 	return func(addr common.Address, tx *types.Transaction) (*types.Transaction, error) {
-		if addr != keyAddr {
+		if addr != mk.Addr {
 			return nil, bind.ErrNotAuthorized
 		}
 
