@@ -109,7 +109,17 @@ func (mk *ManagedKey) NewEthereumSigner(ctx context.Context, txIdentification ty
 			return nil, fmt.Errorf("Google KMS asymmetric sign operation unsuccessful: %w", err)
 		}
 
+		// Signature in "normalized" form:
+		// https://en.bitcoin.it/wiki/BIP_0062
+		sig := resp.Signature
+		// Need uncompressed with "recovery ID" at end:
+		// https://ethereum.stackexchange.com/a/53182/39582
+		if len(sig) < 65 {
+			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave %d-byte signature", len(sig))
+		}
+		sig = sig[len(sig)-65:]
+
 		// sign the transaction
-		return tx.WithSignature(txIdentification, resp.Signature)
+		return tx.WithSignature(txIdentification, sig)
 	}
 }
