@@ -8,6 +8,7 @@ import (
 	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 
 	kms "cloud.google.com/go/kms/apiv1"
 	btcecdsa "github.com/btcsuite/btcd/btcec/v2/ecdsa"
@@ -110,27 +111,16 @@ func (mk *ManagedKey) NewEthereumSigner(ctx context.Context, txIdentification ty
 			return nil, fmt.Errorf("Google KMS asymmetric sign operation unsuccessful: %w", err)
 		}
 
-		// Signature in "normalized" form:
-		// https://en.bitcoin.it/wiki/BIP_0062
-		if len(resp.Signature) == 0 {
-			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave %d-byte signature", len(resp.Signature))
+		var parsedSig struct{ R, S *big.Int }
+		_, err = asn1.Unmarshal(resp.Signature, &parsedSig)
+		if err != nil || parsedSig.R == nil || parsedSig.S == nil {
+			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave malformed signature: %w", err)
 		}
-		if int(uint(resp.Signature[0])) != len(resp.Signature)-2 {
-			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave signature %#x with header mismatch", resp.Signature)
+		RBytes := parsedSig.R.Bytes()
+		SBytes := parsedSig.S.Bytes()
+		if len(RBytes) > 32 || len(SBytes) > 32 {
+			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave %d-byte R and %d-byte S; want 32 bytes at most", len(RBytes), len(SBytes))
 		}
-		RLen := int(uint(resp.Signature[1]))
-		if RLen+2 >= len(resp.Signature) {
-			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave signature %#x with corrupt R-length", resp.Signature)
-		}
-		SLen := int(uint(resp.Signature[RLen+2]))
-		if SLen+RLen+4 != len(resp.Signature) {
-			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave signature %#x with corrupt S-length", resp.Signature)
-		}
-		if RLen > 32 || SLen > 32 {
-			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave signature %#x with %d-byte R and %d-byte S; want 32 at most", resp.Signature, RLen, SLen)
-		}
-		RBytes := resp.Signature[2 : 2+RLen]
-		SBytes := resp.Signature[3+RLen : len(resp.Signature)-1]
 
 		// Need uncompressed with "recovery ID" at end:
 		// https://ethereum.stackexchange.com/a/53182/39582
@@ -144,8 +134,8 @@ func (mk *ManagedKey) NewEthereumSigner(ctx context.Context, txIdentification ty
 
 			var btcsig [65]byte
 			btcsig[0] = recoveryID + 27
-			copy(btcsig[33-RLen:33], RBytes)
-			copy(btcsig[65-SLen:65], SBytes)
+			copy(btcsig[33-len(RBytes):33], RBytes)
+			copy(btcsig[65-len(SBytes):65], SBytes)
 			txHash := txIdentification.Hash(tx)
 			pubKey, _, err := btcecdsa.RecoverCompact(btcsig[:], txHash[:])
 			if err != nil {
