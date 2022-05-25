@@ -8,6 +8,7 @@ import (
 	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"math/big"
 
 	kms "cloud.google.com/go/kms/apiv1"
@@ -125,12 +126,14 @@ func (mk *ManagedKey) NewEthereumSigner(ctx context.Context, txIdentification ty
 		// Need uncompressed with "recovery ID" at end:
 		// https://ethereum.stackexchange.com/a/53182/39582
 		for recoveryID := byte(0); recoveryID < 4; recoveryID++ {
+			log.Print("DEBUG: try recovery ID ", recoveryID)
+
 			// https://github.com/ethereum/go-ethereum/blob/de23cf910b814867d5c5d1ad6164835d79069638/core/types/transaction_signing.go#L491
 			var sig [65]byte
 			copy(sig[32-len(RBytes):32], RBytes)
 			copy(sig[64-len(SBytes):64], SBytes)
 			// https://github.com/ethereum/go-ethereum/blob/de23cf910b814867d5c5d1ad6164835d79069638/core/types/transaction.go#L227
-			sig[64] = byte((txIdentification.ChainID().Uint64()*2)+35) + recoveryID
+			sig[64] = recoveryID
 
 			var btcsig [65]byte
 			btcsig[0] = recoveryID + 27
