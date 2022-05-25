@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	kms "cloud.google.com/go/kms/apiv1"
+	btcecdsa "github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	gax "github.com/googleapis/gax-go/v2"
 	kmspb "google.golang.org/genproto/googleapis/cloud/kms/v1"
 
@@ -111,15 +112,54 @@ func (mk *ManagedKey) NewEthereumSigner(ctx context.Context, txIdentification ty
 
 		// Signature in "normalized" form:
 		// https://en.bitcoin.it/wiki/BIP_0062
-		sig := resp.Signature
+		if len(resp.Signature) == 0 {
+			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave %d-byte signature", len(resp.Signature))
+		}
+		if int(uint(resp.Signature[0])) != len(resp.Signature)-2 {
+			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave signature %#x with header mismatch", resp.Signature)
+		}
+		RLen := int(uint(resp.Signature[1]))
+		if RLen+2 >= len(resp.Signature) {
+			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave signature %#x with corrupt R-length", resp.Signature)
+		}
+		SLen := int(uint(resp.Signature[RLen+2]))
+		if SLen+RLen+4 != len(resp.Signature) {
+			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave signature %#x with corrupt S-length", resp.Signature)
+		}
+		if RLen > 32 || SLen > 32 {
+			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave signature %#x with %d-byte R and %d-byte S; want 32 at most", resp.Signature, RLen, SLen)
+		}
+		RBytes := resp.Signature[2 : 2+RLen]
+		SBytes := resp.Signature[3+RLen : len(resp.Signature)-1]
+
 		// Need uncompressed with "recovery ID" at end:
 		// https://ethereum.stackexchange.com/a/53182/39582
-		if len(sig) < 65 {
-			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave %d-byte signature", len(sig))
-		}
-		sig = sig[len(sig)-65:]
+		for recoveryID := byte(0); recoveryID < 4; recoveryID++ {
+			// https://github.com/ethereum/go-ethereum/blob/de23cf910b814867d5c5d1ad6164835d79069638/core/types/transaction_signing.go#L491
+			var sig [65]byte
+			copy(sig[32-len(RBytes):32], RBytes)
+			copy(sig[64-len(SBytes):64], SBytes)
+			// https://github.com/ethereum/go-ethereum/blob/de23cf910b814867d5c5d1ad6164835d79069638/core/types/transaction.go#L227
+			sig[64] = byte((txIdentification.ChainID().Uint64()*2)+35) + recoveryID
 
-		// sign the transaction
-		return tx.WithSignature(txIdentification, sig)
+			var btcsig [65]byte
+			btcsig[0] = recoveryID + 27
+			copy(btcsig[33-RLen:33], RBytes)
+			copy(btcsig[65-SLen:65], SBytes)
+			txHash := txIdentification.Hash(tx)
+			pubKey, _, err := btcecdsa.RecoverCompact(btcsig[:], txHash[:])
+			if err != nil {
+				return nil, fmt.Errorf("Google KMS asymmetric sign operation gave signature %#x, which is irrecoverable: %w", resp.Signature, err)
+			}
+
+			var addr common.Address
+			copy(addr[:], crypto.Keccak256(pubKey.SerializeUncompressed()[1:])[12:])
+			if addr == mk.Addr {
+				// sign the transaction
+				return tx.WithSignature(txIdentification, sig[:])
+			}
+		}
+
+		return nil, fmt.Errorf("Google KMS asymmetric sign operation gave signature %#x; no recoverable signatures found", resp.Signature)
 	}
 }
