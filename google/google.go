@@ -8,7 +8,6 @@ import (
 	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
-	"log"
 	"math/big"
 
 	kms "cloud.google.com/go/kms/apiv1"
@@ -72,7 +71,7 @@ func resolveAddr(ctx context.Context, client *kms.KeyManagementClient, keyName s
 		return common.Address{}, fmt.Errorf("Google KMS public key %q ASN.1 algorithm %s intead of %s", keyName, gotAlg, wantAlg)
 	}
 
-	return common.BytesToAddress(crypto.Keccak256(info.Key.Bytes[1:])[12:]), nil
+	return pubKeyAddr(info.Key.Bytes), nil
 }
 
 // NewEthereumTransactor retuns a KMS-backed instance. Ctx applies to the entire
@@ -94,7 +93,7 @@ func (mk *ManagedKey) NewEthereumSigner(ctx context.Context, txIdentification ty
 		}
 
 		// hash the transaction (with Keccak-256 probably)
-		digest := txIdentification.Hash(tx).Bytes()
+		txHash := txIdentification.Hash(tx)
 
 		// resolve a signature
 		req := kmspb.AsymmetricSignRequest{
@@ -103,56 +102,66 @@ func (mk *ManagedKey) NewEthereumSigner(ctx context.Context, txIdentification ty
 			// Unclear why the API/client cares anyway. 🤨
 			Digest: &kmspb.Digest{
 				Digest: &kmspb.Digest_Sha256{
-					Sha256: digest,
+					Sha256: txHash[:],
 				},
 			},
 		}
 		resp, err := mk.asymmetricSignFunc(ctx, &req)
 		if err != nil {
-			return nil, fmt.Errorf("Google KMS asymmetric sign operation unsuccessful: %w", err)
+			return nil, fmt.Errorf("Google KMS asymmetric sign operation: %w", err)
 		}
 
-		var parsedSig struct{ R, S *big.Int }
-		_, err = asn1.Unmarshal(resp.Signature, &parsedSig)
-		if err != nil || parsedSig.R == nil || parsedSig.S == nil {
-			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave malformed signature: %w", err)
+		// parse signature
+		var params struct{ R, S *big.Int }
+		_, err = asn1.Unmarshal(resp.Signature, &params)
+		if err != nil {
+			return nil, fmt.Errorf("Google KMS asymmetric signature encoding: %w", err)
 		}
-		RBytes := parsedSig.R.Bytes()
-		SBytes := parsedSig.S.Bytes()
-		if len(RBytes) > 32 || len(SBytes) > 32 {
-			return nil, fmt.Errorf("Google KMS asymmetric sign operation gave %d-byte R and %d-byte S; want 32 bytes at most", len(RBytes), len(SBytes))
+		var rLen, sLen int // byte size
+		if params.R != nil {
+			rLen = (params.R.BitLen() + 7) / 8
+		}
+		if params.S != nil {
+			sLen = (params.S.BitLen() + 7) / 8
+		}
+		if rLen == 0 || rLen > 32 || sLen == 0 || sLen > 32 {
+			return nil, fmt.Errorf("Google KMS asymmetric signature with %d-byte r and %d-byte s denied on size", rLen, sLen)
 		}
 
-		// Need uncompressed with "recovery ID" at end:
+		// Need uncompressed signature with "recovery ID" at end:
+		// https://bitcointalk.org/index.php?topic=5249677.0
 		// https://ethereum.stackexchange.com/a/53182/39582
-		for recoveryID := byte(0); recoveryID < 4; recoveryID++ {
-			log.Print("DEBUG: try recovery ID ", recoveryID)
+		var sig [66]byte // + 1-byte header + 1-byte tailer
+		params.R.FillBytes(sig[33-rLen : 33])
+		params.S.FillBytes(sig[65-sLen : 65])
 
-			// https://github.com/ethereum/go-ethereum/blob/de23cf910b814867d5c5d1ad6164835d79069638/core/types/transaction_signing.go#L491
-			var sig [65]byte
-			copy(sig[32-len(RBytes):32], RBytes)
-			copy(sig[64-len(SBytes):64], SBytes)
-			// https://github.com/ethereum/go-ethereum/blob/de23cf910b814867d5c5d1ad6164835d79069638/core/types/transaction.go#L227
-			sig[64] = recoveryID
-
-			var btcsig [65]byte
-			btcsig[0] = recoveryID + 27
-			copy(btcsig[33-len(RBytes):33], RBytes)
-			copy(btcsig[65-len(SBytes):65], SBytes)
-			txHash := txIdentification.Hash(tx)
-			pubKey, _, err := btcecdsa.RecoverCompact(btcsig[:], txHash[:])
+		// brute force try includes KMS verification
+		var recoverErr error
+		for recoveryID := byte(0); recoveryID < 2; recoveryID++ {
+			sig[0] = recoveryID + 27 // BitCoin header
+			btcsig := sig[:64]       // exclude Ethereum 'v' parameter
+			pubKey, _, err := btcecdsa.RecoverCompact(btcsig, txHash[:])
 			if err != nil {
-				return nil, fmt.Errorf("Google KMS asymmetric sign operation gave signature %#x, which is irrecoverable: %w", resp.Signature, err)
+				recoverErr = err
+				continue
 			}
 
-			var addr common.Address
-			copy(addr[:], crypto.Keccak256(pubKey.SerializeUncompressed()[1:])[12:])
-			if addr == mk.Addr {
+			if pubKeyAddr(pubKey.SerializeUncompressed()) == mk.Addr {
 				// sign the transaction
-				return tx.WithSignature(txIdentification, sig[:])
+				sig[65] = recoveryID // Ethereum 'v' parameter
+				etcsig := sig[1:]    // exclude BitCoin header
+				return tx.WithSignature(txIdentification, etcsig)
 			}
 		}
-
-		return nil, fmt.Errorf("Google KMS asymmetric sign operation gave signature %#x; no recoverable signatures found", resp.Signature)
+		// recoverErr can be nil, but that's OK
+		return nil, fmt.Errorf("Google KMS asymmetric signature address recovery mis: %w", recoverErr)
 	}
+}
+
+// PubKeyAddr returns the Ethereum address for the (uncompressed) key bytes.
+func pubKeyAddr(bytes []byte) common.Address {
+	digest := crypto.Keccak256(bytes[1:])
+	var addr common.Address
+	copy(addr[:], digest[12:])
+	return addr
 }
