@@ -5,7 +5,10 @@
 The `google` package provides Ethereum signatures with the Key Management System
 (KMS) from the Google Cloud Platform (GCP).
 
+This is free and unencumbered software released into the
+[public domain](https://creativecommons.org/publicdomain/zero/1.0).
 
-# Contribute
+
+## Contribute
 
 Your feedback and code is welcome.
