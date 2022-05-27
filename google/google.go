@@ -139,7 +139,7 @@ func (mk *ManagedKey) NewEthereumSigner(ctx context.Context, txIdentification ty
 		var recoverErr error
 		for recoveryID := byte(0); recoveryID < 2; recoveryID++ {
 			sig[0] = recoveryID + 27 // BitCoin header
-			btcsig := sig[:64]       // exclude Ethereum 'v' parameter
+			btcsig := sig[:65]       // exclude Ethereum 'v' parameter
 			pubKey, _, err := btcecdsa.RecoverCompact(btcsig, txHash[:])
 			if err != nil {
 				recoverErr = err
