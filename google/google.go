@@ -24,8 +24,8 @@ import (
 
 // ManagedKey uses the Key Management Service (KMS) for blockchain operation.
 type ManagedKey struct {
-	KeyName string         // identifier within cloud project
-	Addr    common.Address // public key identifier on the blockchain
+	KeyName string         // identifier within Google cloud project
+	Addr    common.Address // public key identifier on blockchain
 
 	// AsymmetricSign method from a Google kms.KeyManagementClient.
 	asymmetricSignFunc func(context.Context, *kmspb.AsymmetricSignRequest, ...gax.CallOption) (*kmspb.AsymmetricSignResponse, error)
@@ -74,8 +74,8 @@ func resolveAddr(ctx context.Context, client *kms.KeyManagementClient, keyName s
 	return pubKeyAddr(info.Key.Bytes), nil
 }
 
-// NewEthereumTransactor retuns a KMS-backed instance. Ctx applies to the entire
-// lifespan of the transactor.
+// NewEthereumTransactor returns a KMS-backed instance. Ctx applies to the
+// entire lifespan of the bind.TransactOpts.
 func (mk *ManagedKey) NewEthereumTransactor(ctx context.Context, txIdentification types.Signer) *bind.TransactOpts {
 	return &bind.TransactOpts{
 		Context: ctx,
@@ -84,8 +84,8 @@ func (mk *ManagedKey) NewEthereumTransactor(ctx context.Context, txIdentificatio
 	}
 }
 
-// NewEthereumSigner retuns a KMS-backed instance. Ctx applies to the entire
-// lifespan of the signer.
+// NewEthereumSigner returns a KMS-backed instance. Ctx applies to the entire
+// lifespan of the bind.SignerFn.
 func (mk *ManagedKey) NewEthereumSigner(ctx context.Context, txIdentification types.Signer) bind.SignerFn {
 	return func(addr common.Address, tx *types.Transaction) (*types.Transaction, error) {
 		if addr != mk.Addr {
