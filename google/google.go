@@ -1,5 +1,5 @@
 // Package google utilises the Key Management Service (KMS) from the Google
-// Cloud Platform (GCP).
+// Cloud Platform (GCP) for Ethereum operations.
 package google
 
 import (
@@ -22,12 +22,16 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// ManagedKey uses the Key Management Service (KMS) for blockchain operation.
+// ManagedKey represents a key from the Key Management Service (KMS).
 type ManagedKey struct {
-	KeyName      string         // identifier within Google cloud project
-	EthereumAddr common.Address // public key identifier on blockchain
+	// KMS uses a slash-separated path for identification.
+	// This field is read-only.
+	KeyName string
+	// Each (public) key maps to one address on the blockchain.
+	// This field is read-only.
+	EthereumAddr common.Address
 
-	// AsymmetricSign method from a Google kms.KeyManagementClient.
+	// AsymmetricSignFunc is a method from a Google kms.KeyManagementClient.
 	asymmetricSignFunc func(context.Context, *kmspb.AsymmetricSignRequest, ...gax.CallOption) (*kmspb.AsymmetricSignResponse, error)
 }
 
@@ -158,7 +162,7 @@ func (mk *ManagedKey) NewEthereumSigner(ctx context.Context, txIdentification ty
 	}
 }
 
-// PubKeyAddr returns the Ethereum address for the (uncompressed) key bytes.
+// PubKeyAddr returns the Ethereum address for (uncompressed-)key bytes.
 func pubKeyAddr(bytes []byte) common.Address {
 	digest := crypto.Keccak256(bytes[1:])
 	var addr common.Address
