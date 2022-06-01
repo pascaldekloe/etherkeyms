@@ -1,6 +1,6 @@
-// Package google utilises the Key Management Service (KMS) from the Google
+// Package etherkeyms utilises the Key Management Service (KMS) from the Google
 // Cloud Platform (GCP) for Ethereum operations.
-package google
+package etherkeyms
 
 import (
 	"context"

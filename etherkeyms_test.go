@@ -1,4 +1,4 @@
-package google
+package etherkeyms
 
 import (
 	"context"

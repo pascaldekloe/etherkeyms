@@ -1,4 +1,4 @@
-[![Go Reference](https://pkg.go.dev/badge/github.com/pascaldekloe/etherkeyms/google.svg)](https://pkg.go.dev/github.com/pascaldekloe/etherkeyms/google)
+[![Go Reference](https://pkg.go.dev/badge/github.com/pascaldekloe/etherkeyms.svg)](https://pkg.go.dev/github.com/pascaldekloe/etherkeyms)
 
 EtherKeyMS is a library for Ethereum operation with the Key Management Service
 (KMS) from the Google Cloud Platform (GCP). Better leave those keys in secured
