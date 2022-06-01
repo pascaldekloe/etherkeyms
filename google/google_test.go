@@ -42,8 +42,8 @@ func TestTxSign(t *testing.T) {
 	const wantDigestHex = "84194abff0612910554bdf0c287da7bb24318cbc0740f01bf84844c0ffabd8c7"
 
 	mk := &ManagedKey{
-		KeyName: testKeyName,
-		Addr:    common.HexToAddress(signAddrHex),
+		KeyName:      testKeyName,
+		EthereumAddr: common.HexToAddress(signAddrHex),
 
 		// mockup
 		asymmetricSignFunc: func(ctx context.Context, req *kmspb.AsymmetricSignRequest, options ...gax.CallOption) (*kmspb.AsymmetricSignResponse, error) {
@@ -64,7 +64,7 @@ func TestTxSign(t *testing.T) {
 		},
 	}
 
-	signedTx, err := mk.NewEthereumTransactor(ctx, testSigner).Signer(mk.Addr, testTx)
+	signedTx, err := mk.NewEthereumTransactor(ctx, testSigner).Signer(mk.EthereumAddr, testTx)
 	if err != nil {
 		t.Fatal("SignerFn from NewEthereumTransactor error:", err)
 	}

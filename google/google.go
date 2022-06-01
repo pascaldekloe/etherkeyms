@@ -24,8 +24,8 @@ import (
 
 // ManagedKey uses the Key Management Service (KMS) for blockchain operation.
 type ManagedKey struct {
-	KeyName string         // identifier within Google cloud project
-	Addr    common.Address // public key identifier on blockchain
+	KeyName      string         // identifier within Google cloud project
+	EthereumAddr common.Address // public key identifier on blockchain
 
 	// AsymmetricSign method from a Google kms.KeyManagementClient.
 	asymmetricSignFunc func(context.Context, *kmspb.AsymmetricSignRequest, ...gax.CallOption) (*kmspb.AsymmetricSignResponse, error)
@@ -41,7 +41,7 @@ func NewManagedKey(ctx context.Context, client *kms.KeyManagementClient, keyName
 
 	return &ManagedKey{
 		KeyName:            keyName,
-		Addr:               addr,
+		EthereumAddr:       addr,
 		asymmetricSignFunc: client.AsymmetricSign,
 	}, nil
 }
@@ -79,7 +79,7 @@ func resolveAddr(ctx context.Context, client *kms.KeyManagementClient, keyName s
 func (mk *ManagedKey) NewEthereumTransactor(ctx context.Context, txIdentification types.Signer) *bind.TransactOpts {
 	return &bind.TransactOpts{
 		Context: ctx,
-		From:    mk.Addr,
+		From:    mk.EthereumAddr,
 		Signer:  mk.NewEthereumSigner(ctx, txIdentification),
 	}
 }
@@ -88,7 +88,7 @@ func (mk *ManagedKey) NewEthereumTransactor(ctx context.Context, txIdentificatio
 // lifespan of the bind.SignerFn.
 func (mk *ManagedKey) NewEthereumSigner(ctx context.Context, txIdentification types.Signer) bind.SignerFn {
 	return func(addr common.Address, tx *types.Transaction) (*types.Transaction, error) {
-		if addr != mk.Addr {
+		if addr != mk.EthereumAddr {
 			return nil, bind.ErrNotAuthorized
 		}
 
@@ -146,7 +146,7 @@ func (mk *ManagedKey) NewEthereumSigner(ctx context.Context, txIdentification ty
 				continue
 			}
 
-			if pubKeyAddr(pubKey.SerializeUncompressed()) == mk.Addr {
+			if pubKeyAddr(pubKey.SerializeUncompressed()) == mk.EthereumAddr {
 				// sign the transaction
 				sig[65] = recoveryID // Ethereum 'v' parameter
 				etcsig := sig[1:]    // exclude BitCoin header
